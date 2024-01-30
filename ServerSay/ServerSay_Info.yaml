@@ -1,0 +1,6 @@
+Name: ServerSay
+Descirption: Modified sample mod with banking features to send credits to other players.
+Author: Jay Whaley
+Version: v0.1
+Website: https://github.com/jaywha
+ModTargets: Client
