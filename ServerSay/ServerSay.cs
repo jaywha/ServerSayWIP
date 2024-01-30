@@ -44,6 +44,10 @@ namespace ServerSay
         //Current list of active players
         readonly Dictionary<string, int> PlayerList = new Dictionary<string, int> { };
 
+        //Current list of savings accounts
+        //TODO: need to be uploaded to a database of some sort... maybe SQLite??
+        readonly Dictionary<int, SavingsAccount> PlayerSavings = new Dictionary<int, SavingsAccount>();
+
         //This variable is to hold the AdminConfig data
         internal static AdminConfig.Root AdminConfigData = new AdminConfig.Root { };
 
@@ -110,13 +114,34 @@ namespace ServerSay
                     var chatArgs = bankArgs.ChatInfo.msg.Split(' ');
                     string recipient = chatArgs[1];
                     int.TryParse(chatArgs[2], out int amount);
+                    var playerSavingsBalance = PlayerSavings[bankArgs.TriggeringPlayer].Balance;
 
-                    if (recipient.Equals("save")) {
-
-                    } else if (!PlayerList.ContainsKey(recipient))
+                    if (recipient.Equals("save"))
+                    {
+                        if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(bankArgs.TriggeringPlayer, -amount)))
+                        {
+                            PlayerSavings[bankArgs.TriggeringPlayer].Balance += amount;
+                            modApi1.Console_Write($"Succesfully deposited {amount} to your savings account.\nThank you for being a Polaris Bank of Commerce customer!");
+                        }
+                    }
+                    else if (recipient.Equals("get"))
+                    {
+                        if (playerSavingsBalance < amount)
+                        {
+                            modApi1.Console_Write($"Failed to withdraw funds due to insufficent balance in savings account!\nCurrent balance is: {playerSavingsBalance}");
+                        }
+                        else if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(bankArgs.TriggeringPlayer, amount)))
+                        {
+                            PlayerSavings[bankArgs.TriggeringPlayer].Balance -= amount;
+                            modApi1.Console_Write($"Succesfully withdrew {amount} to your savings account.\nThank you for being a Polaris Bank of Commerce customer!");
+                        }
+                    } 
+                    else if (!PlayerList.ContainsKey(recipient))
                     {
                         modApi1.Console_Write($"Failed transfer: player \"{recipient}\" not found in player list");
-                    } else if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], amount))) {
+                    }
+                    else if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], amount)))
+                    {
                         SeqNrStorage[token] = bankArgs;
                         modApi1.Game_Request(CmdId.Request_Player_Info, token, new Id(bankArgs.TriggeringPlayer));
                     }
@@ -149,6 +174,7 @@ namespace ServerSay
                     string recipient = chatArgs[1];
                     int.TryParse(chatArgs[2], out int amount);
 
+                    // TODO: Reason codes, like insufficent funds, player not found?
                     if (Received_PlayerInfo.credits < amount)
                     {
                         modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], -amount));
@@ -159,7 +185,6 @@ namespace ServerSay
                     {
                         modApi1.Console_Write($"Succesfully transferred {amount} Credits to {recipient}");
                     } else {
-                        // TODO: Reason codes, like insufficent funds, player not found?
                         modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], -amount));
                         modApi1.Console_Write($"Failed transfer: unkown reason");
                     }
@@ -231,12 +256,15 @@ namespace ServerSay
 
             //store the ModGameAPI as modApi1 so we can use those functions later
             modApi1 = dediAPI;
+
+            modApi1.Console_Write("$$$ PBC has been initialized. $$$");
         }
 
         //required by API1, though we arent using it for anything in this mod. In fact, I think Eleon broke this one...
         public void Game_Update()
         {
             //API1 version of Application_Update (not shown here)
+            //TODO: Update interest on savings accounts
         }
     }
 }
