@@ -15,10 +15,13 @@ using Eleon;
 
 //using statement for API1 to work. Requires Refence to Mif.DLL (see solution Explorer on the right)
 using Eleon.Modding;
+using EmpyrionNetAPIAccess;
+using EmpyrionNetAPIDefinitions;
+using EmpyrionNetAPITools;
 
 namespace ServerSay
 {
-    public class ServerSay : ModInterface
+    public sealed partial class ServerSay : ModInterface, IMod, IDisposable
     {
         /// <summary> Max range of sequence number so that 100 of that transaction type can flow through. </summary>
         const ushort SeqNumRangeMax = 99;
@@ -39,7 +42,17 @@ namespace ServerSay
         ushort subCreditsAcc = 0;
 
         //These 2 variables so you can access the API functions later
-        internal static ModGameAPI modApi1;
+        public static ModGameAPI legacyDedicatedAPI { get; set; }
+        public static IModApi ModApi { get; set; }
+
+        public static ConfigurationManager<Configuration> Configuration { get; set; } = new ConfigurationManager<Configuration>() { Current = new Configuration() };
+
+        public class DediLegacyModBase : EmpyrionModBase
+        {
+            public override void Initialize(ModGameAPI dediAPI) { }
+        }
+
+        public DediLegacyModBase DediLegacyMod { get; set; }
 
         //Current list of active players
         readonly Dictionary<string, int> PlayerList = new Dictionary<string, int> { };
@@ -48,8 +61,7 @@ namespace ServerSay
         //TODO: need to be uploaded to a database of some sort... maybe SQLite??
         readonly Dictionary<int, SavingsAccount> PlayerSavings = new Dictionary<int, SavingsAccount>();
 
-        //This variable is to hold the AdminConfig data
-        internal static AdminConfig.Root AdminConfigData = new AdminConfig.Root { };
+        private bool disposedValue;
 
         //To store SeqNr so you can call up all the data in your chain
         readonly Dictionary<ushort, StorableData> SeqNrStorage = new Dictionary<ushort, StorableData> { };
@@ -65,14 +77,14 @@ namespace ServerSay
             public ChatInfo ChatInfo;
         }
 
-        //#######################################################################################################################################################
-        //############################################################ API1 Starts Here #########################################################################
-        //#######################################################################################################################################################
+        #region API1 Implementation
 
 
         //Required Function for API1
         public void Game_Event(CmdId eventId, ushort seqNr, object data)
         {
+            Log($"EmpyrionScripting Mod: Game_Event {eventId} {seqNr} {data}", LogLevel.Debug);
+            DediLegacyMod?.Game_Event(eventId, seqNr, data);
 
             //"If we received a chat message"
             if (eventId == CmdId.Event_ChatMessage)
@@ -99,7 +111,7 @@ namespace ServerSay
                     SeqNrStorage[NewSequenceNumber] = newStorable;
 
                     //API1 request the PlayerInfo for the TriggeringPlayer using the NewSequenceNumber so we can recall the ChatInfo later
-                    modApi1.Game_Request(CmdId.Request_Player_Info, (ushort)NewSequenceNumber, new Id(Received_ChatInfo.playerId));
+                    legacyDedicatedAPI.Game_Request(CmdId.Request_Player_Info, (ushort)NewSequenceNumber, new Id(Received_ChatInfo.playerId));
                 }
                 else if (Received_ChatInfo.msg.StartsWith("/bank "))
                 {
@@ -118,32 +130,32 @@ namespace ServerSay
 
                     if (recipient.Equals("save"))
                     {
-                        if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(bankArgs.TriggeringPlayer, -amount)))
+                        if (legacyDedicatedAPI.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(bankArgs.TriggeringPlayer, -amount)))
                         {
                             PlayerSavings[bankArgs.TriggeringPlayer].Balance += amount;
-                            modApi1.Console_Write($"Succesfully deposited {amount} to your savings account.\nThank you for being a Polaris Bank of Commerce customer!");
+                            legacyDedicatedAPI.Console_Write($"Succesfully deposited {amount} to your savings account.\nThank you for being a Polaris Bank of Commerce customer!");
                         }
                     }
                     else if (recipient.Equals("get"))
                     {
                         if (playerSavingsBalance < amount)
                         {
-                            modApi1.Console_Write($"Failed to withdraw funds due to insufficent balance in savings account!\nCurrent balance is: {playerSavingsBalance}");
+                            legacyDedicatedAPI.Console_Write($"Failed to withdraw funds due to insufficent balance in savings account!\nCurrent balance is: {playerSavingsBalance}");
                         }
-                        else if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(bankArgs.TriggeringPlayer, amount)))
+                        else if (legacyDedicatedAPI.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(bankArgs.TriggeringPlayer, amount)))
                         {
                             PlayerSavings[bankArgs.TriggeringPlayer].Balance -= amount;
-                            modApi1.Console_Write($"Succesfully withdrew {amount} to your savings account.\nThank you for being a Polaris Bank of Commerce customer!");
+                            legacyDedicatedAPI.Console_Write($"Succesfully withdrew {amount} to your savings account.\nThank you for being a Polaris Bank of Commerce customer!");
                         }
                     } 
                     else if (!PlayerList.ContainsKey(recipient))
                     {
-                        modApi1.Console_Write($"Failed transfer: player \"{recipient}\" not found in player list");
+                        legacyDedicatedAPI.Console_Write($"Failed transfer: player \"{recipient}\" not found in player list");
                     }
-                    else if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], amount)))
+                    else if (legacyDedicatedAPI.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], amount)))
                     {
                         SeqNrStorage[token] = bankArgs;
-                        modApi1.Game_Request(CmdId.Request_Player_Info, token, new Id(bankArgs.TriggeringPlayer));
+                        legacyDedicatedAPI.Game_Request(CmdId.Request_Player_Info, token, new Id(bankArgs.TriggeringPlayer));
                     }
                 }
             }
@@ -177,16 +189,16 @@ namespace ServerSay
                     // TODO: Reason codes, like insufficent funds, player not found?
                     if (Received_PlayerInfo.credits < amount)
                     {
-                        modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], -amount));
-                        modApi1.Console_Write($"Failed transfer: insufficent credits");
+                        legacyDedicatedAPI.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], -amount));
+                        legacyDedicatedAPI.Console_Write($"Failed transfer: insufficent credits");
                     }
 
-                    if (modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(Received_PlayerInfo.entityId, -amount)))
+                    if (legacyDedicatedAPI.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(Received_PlayerInfo.entityId, -amount)))
                     {
-                        modApi1.Console_Write($"Succesfully transferred {amount} Credits to {recipient}");
+                        legacyDedicatedAPI.Console_Write($"Succesfully transferred {amount} Credits to {recipient}");
                     } else {
-                        modApi1.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], -amount));
-                        modApi1.Console_Write($"Failed transfer: unkown reason");
+                        legacyDedicatedAPI.Game_Request(CmdId.Request_Player_AddCredits, token, new IdCredits(PlayerList[recipient], -amount));
+                        legacyDedicatedAPI.Console_Write($"Failed transfer: unkown reason");
                     }
                 }
                 //"if SeqNrStorage contains the SeqNr we just received..."
@@ -221,7 +233,7 @@ namespace ServerSay
                             string ConsoleCommand = "say '" + Message + "'";
 
                             //it says "Console Command" but its really a "Telnet" command, we dont need to store this SeqNr for later. This line is sending the request for the server to repeat what the Admin said after /say
-                            modApi1.Game_Request(CmdId.Request_ConsoleCommand, (ushort)NewSequenceNumber, new PString(ConsoleCommand));
+                            legacyDedicatedAPI.Game_Request(CmdId.Request_ConsoleCommand, (ushort)NewSequenceNumber, new PString(ConsoleCommand));
                         }
                         //The other part of the Try statement, it catches errors so you can log them.
                         catch { }
@@ -230,13 +242,15 @@ namespace ServerSay
             }
             else if (eventId == CmdId.Event_Player_Connected)
             {
+                legacyDedicatedAPI.Console_Write($"Player connected event: {data}");
                 var mod = RotateSeqNumPtr(ref addPlayerAcc, AddPlayerSeqNum);
-                modApi1.Game_Request(CmdId.Request_Player_Info, (ushort) (AddPlayerSeqNum+mod), new Id((int)data));
+                legacyDedicatedAPI.Game_Request(CmdId.Request_Player_Info, (ushort) (AddPlayerSeqNum+mod), new Id((int)data));
             }
             else if (eventId == CmdId.Event_Player_Disconnected)
             {
+                legacyDedicatedAPI.Console_Write($"Player disconnected event: {data}");
                 var mod = RotateSeqNumPtr(ref subPlayerAcc, SubPlayerSeqNum);
-                modApi1.Game_Request(CmdId.Request_Player_Info, (ushort) (SubPlayerSeqNum + mod), new Id((int)data));
+                legacyDedicatedAPI.Game_Request(CmdId.Request_Player_Info, (ushort) (SubPlayerSeqNum + mod), new Id((int)data));
             }
         }
 
@@ -247,6 +261,7 @@ namespace ServerSay
         public void Game_Exit()
         {
             //API1 version of Shutdown
+            DediLegacyMod?.Game_Exit();
         }
 
         //required by API1
@@ -255,16 +270,63 @@ namespace ServerSay
             //API1 version of Init
 
             //store the ModGameAPI as modApi1 so we can use those functions later
-            modApi1 = dediAPI;
+            legacyDedicatedAPI = dediAPI;
+            legacyDedicatedAPI?.Console_Write("PCB Mod started: Game_Start");
 
-            modApi1.Console_Write("$$$ PBC has been initialized. $$$");
+            DediLegacyMod = new DediLegacyModBase();
+            DediLegacyMod?.Game_Start(legacyDedicatedAPI);
         }
 
         //required by API1, though we arent using it for anything in this mod. In fact, I think Eleon broke this one...
         public void Game_Update()
         {
             //API1 version of Application_Update (not shown here)
+            DediLegacyMod?.Game_Update();
+
             //TODO: Update interest on savings accounts
+        }
+
+        #endregion
+
+        #region API2 Implementation
+
+        public void Init(IModApi modAPI)
+        {
+            ModApi = modAPI;
+            ModApi.Log("$$$ PBC: starting initialization... $$$");
+            if (ModApi.Application.Mode == ApplicationMode.DedicatedServer)
+            {
+                //TODO: Dedicated stuff?
+                
+                return;
+            }
+            ModApi.Log("$$$ PBC: client interface detected. Init complete. $$$");
+        }
+
+        public void Shutdown()
+        {
+            ModApi.Log("$$$ PBC: shutdown. $$$");
+        }
+
+        #endregion
+
+        public void Dispose()
+        {
+            ModApi.Log("$$$ PBC: disposed. $$$");
+        }
+
+        public static void Log(string text, LogLevel level)
+        {
+            if (Configuration?.Current.LogLevel <= level)
+            {
+                switch (level)
+                {
+                    case LogLevel.Debug: ModApi?.Log(text); break;
+                    case LogLevel.Message: ModApi?.Log(text); break;
+                    case LogLevel.Error: ModApi?.LogError(text); break;
+                    default: ModApi?.Log(text); break;
+                }
+            }
         }
     }
 }
